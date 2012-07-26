@@ -12,7 +12,19 @@ EndScene_t org_EndScene;
 
 HRESULT WINAPI h_EndScene(LPDIRECT3DDEVICE9 pDevice)
 { 
+	ID3DXSprite *g_pSprite = NULL;
+	LPD3DXFONT g_pFont = NULL;
 
+	// create font object
+	D3DXCreateFont(pDevice, 20, 0, FW_BOLD, 0, FALSE, DEFAULT_CHARSET,
+		OUT_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+		TEXT("±Ã¼­"), &g_pFont);
+
+	// draw text
+	RECT rectTemp = {10, 10, 800, 600};
+	g_pFont->DrawText(g_pSprite, L"Hello World!", -1, &rectTemp, 0, 0xFFFF0000);
+	rectTemp.top = 30;
+	g_pFont->DrawText(g_pSprite, L"¾È³ç, ¼¼»ó¾Æ~_~", -1, &rectTemp, 0, 0xFF0000FF);
 
 	//DXGameHook.DrawRect(pDevice, 40, 110, 50, 50, txtPink);
 	return org_EndScene(pDevice); 
