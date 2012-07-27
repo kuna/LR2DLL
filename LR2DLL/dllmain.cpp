@@ -10,21 +10,33 @@ static HRESULT WINAPI h_EndScene(LPDIRECT3DDEVICE9 pDevice);
 typedef HRESULT(__stdcall* EndScene_t)(LPDIRECT3DDEVICE9);
 EndScene_t org_EndScene;
 
+HMODULE m_hmodule;
+void LoadHandle(HWND *h);
+void InputModule(HMODULE *hmodule);
+
+BOOL isFontCreated = FALSE;
+LPD3DXFONT g_pFont = NULL;
+BOOL FontCreate(LPDIRECT3DDEVICE9 pDevice) {
+	// create font object
+	D3DXCreateFont(pDevice, 36, 0, FW_BOLD, 0, FALSE, DEFAULT_CHARSET,
+		OUT_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+		TEXT("Arial"), &g_pFont);
+	return TRUE;
+}
+
 HRESULT WINAPI h_EndScene(LPDIRECT3DDEVICE9 pDevice)
 { 
-	ID3DXSprite *g_pSprite = NULL;
-	LPD3DXFONT g_pFont = NULL;
+	if (!isFontCreated) {
+		FontCreate(pDevice);
+		isFontCreated = TRUE;
+	}
 
-	// create font object
-	D3DXCreateFont(pDevice, 20, 0, FW_BOLD, 0, FALSE, DEFAULT_CHARSET,
-		OUT_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-		TEXT("±Ã¼­"), &g_pFont);
+	TCHAR str[255];
+	wsprintf(str, L"this is test");
 
 	// draw text
 	RECT rectTemp = {10, 10, 800, 600};
-	g_pFont->DrawText(g_pSprite, L"Hello World!", -1, &rectTemp, 0, 0xFFFF0000);
-	rectTemp.top = 30;
-	g_pFont->DrawText(g_pSprite, L"¾È³ç, ¼¼»ó¾Æ~_~", -1, &rectTemp, 0, 0xFF0000FF);
+	g_pFont->DrawText(NULL, str, -1, &rectTemp, 0, 0xCCFFFF00); //ID3DXSprite *g_pSprite = NULL;
 
 	//DXGameHook.DrawRect(pDevice, 40, 110, 50, 50, txtPink);
 	return org_EndScene(pDevice); 
@@ -60,6 +72,7 @@ DWORD FindPattern(DWORD dwAddress,DWORD dwLen,BYTE *bMask,char* szMask)
 	return 0;
 }
 
+DWORD backup_Pattern = 0;
 int StartD3DHooks()
 {
 	DWORD D3DPattern,*vTable, DXBase=NULL;
@@ -67,15 +80,44 @@ int StartD3DHooks()
 	while(!DXBase);
 	{
 		D3DPattern = FindPattern(DXBase, 0x128000, 
-			(PBYTE)"\xC7\x06\x00\x00\x00\x00\x89\x86\x00\x00\x00\x00\x89\x86", "xx    xx    xx"); 
+			(PBYTE)"\xC7\x06\x00\x00\x00\x00\x89\x86\x00\x00\x00\x00\x89\x86", "xx????xx????xx"); 
 	}
 	if(D3DPattern)
 	{
 		memcpy(&vTable,(void*)(D3DPattern+2),4);
 		org_EndScene = (EndScene_t)DetourFunc((PBYTE)vTable[ENDSCENE],
 			(PBYTE)h_EndScene,5);
+
+		// backup
+		backup_Pattern = D3DPattern;
 	}
-	return 0;
+	
+	return TRUE;
+}
+
+bool RetourFunc(BYTE *src, BYTE *restore, const int len)
+{
+  DWORD dwback;
+  if(!VirtualProtect(src, len, PAGE_READWRITE, &dwback))  { return (false); }
+  if(!memcpy(src, restore, len))              { return (false); }
+  restore[0] = 0xE9;
+  *(DWORD*)(restore+1) = (DWORD)(src - restore) - 5;
+  if(!VirtualProtect(src, len, dwback, &dwback))      { return (false); }
+  return (true);
+}
+
+int RestoreD3DHooks()
+{
+	if (backup_Pattern == 0) {
+		MessageBox(NULL,L"wer", L"", NULL);
+		return FALSE;
+	}
+	
+	DWORD *vTable;
+	memcpy(&vTable,(void*)(backup_Pattern+2),4);
+	RetourFunc((PBYTE)vTable[ENDSCENE], (PBYTE)org_EndScene,5);
+
+	return TRUE;
 }
 
 BOOL APIENTRY DllMain( HMODULE hModule,
@@ -87,9 +129,14 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 	{
 	case DLL_PROCESS_ATTACH:
 		{
+			// backup
+			//m_hmodule = hModule;
+			//InputModule(&hModule);
+
 			// shared memory·Î hwnd ¾ò±â
 			TCHAR str[256];
 			HWND hWnd = 0;
+			LoadHandle(&hWnd);
 			GetWindowText(hWnd, str, 256);
 			lstrcat(str, L" (Hooked)");
 			SetWindowText(hWnd, str);
@@ -100,10 +147,92 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 			break;
 		}
 	case DLL_THREAD_ATTACH:
-	case DLL_THREAD_DETACH:
-	case DLL_PROCESS_DETACH:
 		break;
+	case DLL_THREAD_DETACH:
+		break;
+	case DLL_PROCESS_DETACH:
+		{
+			TCHAR str[256];
+			HWND hWnd = 0;
+			LoadHandle(&hWnd);
+			GetWindowText(hWnd, str, 256);
+			str[ lstrlen(str) - 9] = 0;
+			SetWindowText(hWnd, str);
+
+			RestoreD3DHooks();
+			break;
+		}
 	}
 	return TRUE;
 }
 
+//////////////////////////
+// shared memory part ////
+//////////////////////////
+
+TCHAR *p;
+void InputMessage(TCHAR *msg) {
+	HANDLE hMemoryMap;
+	hMemoryMap = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(TCHAR)*1024, L"testMap");
+	if (!hMemoryMap) {
+		lstrcpy(msg, L"* error! failed to CreateFileMapping");
+		return;
+	}
+
+	p = (TCHAR*)MapViewOfFile(hMemoryMap, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+	if (!p) {
+		lstrcpy(msg, L"* error! failed to MapViewOfFile");
+		return;
+	}
+	
+	lstrcpy(p, msg);
+}
+
+void LoadMessage(TCHAR *msg) {
+	HANDLE hMemoryMap;
+	hMemoryMap = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(TCHAR)*1024, L"testMap");
+	if (!hMemoryMap) {
+		lstrcpy(msg, L"* error! failed to CreateFileMapping");
+		return;
+	}
+
+	p = (TCHAR*)MapViewOfFile(hMemoryMap, FILE_MAP_READ, 0, 0, 0);
+	if (!p) {
+		lstrcpy(msg, L"* error! failed to MapViewOfFile");
+		return;
+	}
+	
+	lstrcpy(msg, p);
+}
+
+void LoadHandle(HWND *h) {
+	HANDLE hMemoryMap;
+	hMemoryMap = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(HWND), L"LR2_Handle");
+	if (!hMemoryMap) {
+		*h = (HWND)1;
+		return;
+	}
+
+	HWND *m = (HWND*)MapViewOfFile(hMemoryMap, FILE_MAP_READ, 0, 0, 0);
+	if (!m) {
+		*h = (HWND)2;
+		return;
+	}
+	
+	*h = *m;
+}
+
+void InputModule(HMODULE *hmodule) {
+	HANDLE hMemoryMap;
+	hMemoryMap = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(HMODULE), L"LR2_DLLModule");
+	if (!hMemoryMap) {
+		return;
+	}
+
+	HMODULE *p = (HMODULE*)MapViewOfFile(hMemoryMap, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+	if (!p) {
+		return;
+	}
+	
+	*p = *hmodule;
+}
