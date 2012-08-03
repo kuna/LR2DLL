@@ -3,19 +3,36 @@
 #include "d3d9.h"
 #include "d3dx9.h"
 #pragma comment(lib, "d3dx9.lib")
+#include "stdio.h"
 
 #define ENDSCENE 42	// vTable의 42번째에 위치함
+#define SCRWIDTH 640
+#define SCRHEIGHT 480
+#define MSGTIME 2000
 
 static HRESULT WINAPI h_EndScene(LPDIRECT3DDEVICE9 pDevice); 
 typedef HRESULT(__stdcall* EndScene_t)(LPDIRECT3DDEVICE9);
 EndScene_t org_EndScene;
 
 HMODULE m_hmodule;
-void LoadHandle(HWND *h);
-void InputModule(HMODULE *hmodule);
+void setPath();
+
+char filePath[256];
+HANDLE hmm_LR2PicPath;
+char *p_LR2PicPath;
+HANDLE hmm_LR2Message;
+char *p_LR2Message;
+HANDLE hmm_LR2ScreenCapture;
+int *p_LR2ScreenCapture;
+void setSharedMemory();
+void releaseSharedMemory();
 
 BOOL isFontCreated = FALSE;
 LPD3DXFONT g_pFont = NULL;
+int fontTransparency = 0;
+char g_Message[256];
+int g_Message_key = 0;
+DWORD g_Message_time = 0;
 BOOL FontCreate(LPDIRECT3DDEVICE9 pDevice) {
 	// create font object
 	D3DXCreateFont(pDevice, 36, 0, FW_BOLD, 0, FALSE, DEFAULT_CHARSET,
@@ -24,21 +41,90 @@ BOOL FontCreate(LPDIRECT3DDEVICE9 pDevice) {
 	return TRUE;
 }
 
+void createErrorLog(char *msg) {
+	FILE *fp = fopen(".\\LR2DLL_errorlog.txt", "a");
+	if (!fp) return;
+	fprintf(fp, "%s\n", msg);
+	fclose(fp);
+}
+
+LPDIRECT3DDEVICE9 g_pDevice;
+void LR2_CaptureScreen() {
+	if (!g_pDevice) {
+		createErrorLog("error : No Object Pointer");
+		return;
+	}
+	
+	int LR2ScrStatus = 0;
+	LR2ScrStatus = *p_LR2ScreenCapture;
+
+	if (LR2ScrStatus == 1) {
+		// file will be saved to %appdata%\\LR2Twit.jpg
+		IDirect3DSurface9* pSurface;
+
+		HRESULT r;
+		//r = g_pDevice->CreateOffscreenPlainSurface(SCRWIDTH, SCRHEIGHT, D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &pSurface, NULL);
+		r = g_pDevice->CreateOffscreenPlainSurface(640,480,D3DFMT_X8R8G8B8,D3DPOOL_SYSTEMMEM,&pSurface,NULL);
+		if (r != D3D_OK) {
+			createErrorLog("error : CreateOffscreenPlainSurface");
+			LR2ScrStatus = 3;
+		}
+		//r = g_pDevice->GetFrontBufferData(0, pSurface);
+		r = g_pDevice->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&pSurface);
+		if (r != D3D_OK) {
+			createErrorLog("error : GetFrontBufferData");
+			LR2ScrStatus = 3;
+		}
+		r = D3DXSaveSurfaceToFile( L".\\LR2Twit.jpg", D3DXIFF_JPG, pSurface, NULL, NULL );
+		if (r != D3D_OK) {
+			createErrorLog("error : D3DXSaveSurfaceToFile");
+			LR2ScrStatus = 3;
+		}
+
+		// change status to finished
+		if (LR2ScrStatus != 3) LR2ScrStatus = 2;
+	}
+
+	*p_LR2ScreenCapture = LR2ScrStatus;
+}
+
+void LR2_CheckMessage() {
+	if (g_Message_key != p_LR2Message[0]) {
+		// difference in Message!
+		strcpy(g_Message,p_LR2Message+1);
+
+		g_Message_key = p_LR2Message[0];
+		g_Message_time = GetTickCount() + MSGTIME;
+	}
+}
+
 HRESULT WINAPI h_EndScene(LPDIRECT3DDEVICE9 pDevice)
 { 
+	//get device pointer
+	g_pDevice = pDevice;
+
 	if (!isFontCreated) {
 		FontCreate(pDevice);
 		isFontCreated = TRUE;
 	}
 
-	TCHAR str[255];
-	wsprintf(str, L"this is test");
-
 	// draw text
-	RECT rectTemp = {10, 10, 800, 600};
-	g_pFont->DrawText(NULL, str, -1, &rectTemp, 0, 0xCCFFFF00); //ID3DXSprite *g_pSprite = NULL;
+	RECT rectTemp = {10, 10, 620, 420};
 
-	//DXGameHook.DrawRect(pDevice, 40, 110, 50, 50, txtPink);
+	int m_trans = 0;
+	int fontTransparency = g_Message_time - GetTickCount();
+	if (fontTransparency > 0xCC) m_trans = 0xCC;
+	else if (fontTransparency < 0) m_trans = 0;
+	else m_trans = fontTransparency;
+	g_pFont->DrawTextA(NULL, g_Message, -1, &rectTemp, 0, 0x00FFFF00 | (m_trans<<24));
+	fontTransparency--;
+	if (fontTransparency < 0) fontTransparency = 0;
+
+	// check if screen capture is necessary
+	LR2_CaptureScreen();
+	// check message
+	LR2_CheckMessage();
+
 	return org_EndScene(pDevice); 
 }
 
@@ -130,16 +216,14 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 	case DLL_PROCESS_ATTACH:
 		{
 			// backup
-			//m_hmodule = hModule;
-			//InputModule(&hModule);
+			m_hmodule = hModule;
+			
+			// initalize
+			setSharedMemory();
 
-			// shared memory로 hwnd 얻기
-			TCHAR str[256];
-			HWND hWnd = 0;
-			LoadHandle(&hWnd);
-			GetWindowText(hWnd, str, 256);
-			lstrcat(str, L" (Hooked)");
-			SetWindowText(hWnd, str);
+			// setpath for Screenshot
+			setPath();
+
 
 			/* d3d hook */
 			DisableThreadLibraryCalls(hModule);	// DLL THREAD ATTACH 이벤트 미연 방지, 디버거 검출 코드로부터 숨기.
@@ -152,13 +236,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 		break;
 	case DLL_PROCESS_DETACH:
 		{
-			TCHAR str[256];
-			HWND hWnd = 0;
-			LoadHandle(&hWnd);
-			GetWindowText(hWnd, str, 256);
-			str[ lstrlen(str) - 9] = 0;
-			SetWindowText(hWnd, str);
-
+			releaseSharedMemory();
 			RestoreD3DHooks();
 			break;
 		}
@@ -170,69 +248,50 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 // shared memory part ////
 //////////////////////////
 
-TCHAR *p;
-void InputMessage(TCHAR *msg) {
-	HANDLE hMemoryMap;
-	hMemoryMap = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(TCHAR)*1024, L"testMap");
-	if (!hMemoryMap) {
-		lstrcpy(msg, L"* error! failed to CreateFileMapping");
-		return;
-	}
-
-	p = (TCHAR*)MapViewOfFile(hMemoryMap, FILE_MAP_ALL_ACCESS, 0, 0, 0);
-	if (!p) {
-		lstrcpy(msg, L"* error! failed to MapViewOfFile");
-		return;
-	}
+void setPath() {
+	// set path
+	char filePath[256];
+	::GetModuleFileNameA(0, filePath, sizeof(filePath));
+	filePath[strrchr(filePath, '\\') - filePath] = 0;
+	strcat(filePath, "\\LR2Twit.jpg");
 	
-	lstrcpy(p, msg);
+	strcpy(p_LR2PicPath, filePath);
 }
 
-void LoadMessage(TCHAR *msg) {
-	HANDLE hMemoryMap;
-	hMemoryMap = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(TCHAR)*1024, L"testMap");
-	if (!hMemoryMap) {
-		lstrcpy(msg, L"* error! failed to CreateFileMapping");
+void setSharedMemory() {
+	hmm_LR2PicPath = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(filePath), L"LR2PicPath");
+	if (!hmm_LR2PicPath) {
+		return;
+	}
+	p_LR2PicPath = (char*)MapViewOfFile(hmm_LR2PicPath, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+	if (!p_LR2PicPath) {
 		return;
 	}
 
-	p = (TCHAR*)MapViewOfFile(hMemoryMap, FILE_MAP_READ, 0, 0, 0);
-	if (!p) {
-		lstrcpy(msg, L"* error! failed to MapViewOfFile");
+	hmm_LR2ScreenCapture = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(int), L"LR2ScreenCapture");
+	if (!hmm_LR2ScreenCapture) {
+		return;
+	}
+	p_LR2ScreenCapture = (int*)MapViewOfFile(hmm_LR2ScreenCapture, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+	if (!p_LR2ScreenCapture) {
 		return;
 	}
 	
-	lstrcpy(msg, p);
+	hmm_LR2Message = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, 256, L"LR2Message");
+	if (!hmm_LR2Message) {
+		return;
+	}
+	p_LR2Message = (char*)MapViewOfFile(hmm_LR2Message, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+	if (!p_LR2Message) {
+		return;
+	}
 }
 
-void LoadHandle(HWND *h) {
-	HANDLE hMemoryMap;
-	hMemoryMap = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(HWND), L"LR2_Handle");
-	if (!hMemoryMap) {
-		*h = (HWND)1;
-		return;
-	}
-
-	HWND *m = (HWND*)MapViewOfFile(hMemoryMap, FILE_MAP_READ, 0, 0, 0);
-	if (!m) {
-		*h = (HWND)2;
-		return;
-	}
-	
-	*h = *m;
-}
-
-void InputModule(HMODULE *hmodule) {
-	HANDLE hMemoryMap;
-	hMemoryMap = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(HMODULE), L"LR2_DLLModule");
-	if (!hMemoryMap) {
-		return;
-	}
-
-	HMODULE *p = (HMODULE*)MapViewOfFile(hMemoryMap, FILE_MAP_ALL_ACCESS, 0, 0, 0);
-	if (!p) {
-		return;
-	}
-	
-	*p = *hmodule;
+void releaseSharedMemory() {
+	UnmapViewOfFile(p_LR2PicPath);
+	CloseHandle(hmm_LR2PicPath);
+	UnmapViewOfFile(p_LR2ScreenCapture);
+	CloseHandle(hmm_LR2ScreenCapture);
+	UnmapViewOfFile(p_LR2Message);
+	CloseHandle(hmm_LR2Message);
 }
