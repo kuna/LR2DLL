@@ -1,0 +1,15 @@
+*.ilk
+*.pdb
+/Debug/LR2files/
+ipch/
+/lr2csv/Debug/
+/lr2csv/Release
+*.sdf
+*.opensdf
+*.suo
+*.tlog
+*.manifest
+*.log
+*.obj
+*.pch
+*.lastbuildstate

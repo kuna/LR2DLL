@@ -98,6 +98,36 @@ void LR2_CheckMessage() {
 	}
 }
 
+DWORD currentTime;
+int sleepTime = 0;
+int currentFPS = 0;
+bool limitFPS = true;
+
+#define MAXFPS 120
+#define MINFPS 60
+
+VOID controlFPS() {
+	if (!limitFPS)
+		return;
+
+	DWORD nTime = GetTickCount();
+	if (nTime - currentTime >= 1000 || currentTime == 0) {
+		// check FPS
+		if (currentFPS > MAXFPS)
+			sleepTime++;
+		else if (currentFPS < MINFPS)
+			sleepTime--;
+
+		currentFPS = 0;
+		currentTime = nTime;
+	}
+
+	if (sleepTime < 0)
+		sleepTime = 0;
+	currentFPS++;
+	Sleep(sleepTime);
+}
+
 HRESULT WINAPI h_EndScene(LPDIRECT3DDEVICE9 pDevice)
 { 
 	//get device pointer
@@ -124,6 +154,9 @@ HRESULT WINAPI h_EndScene(LPDIRECT3DDEVICE9 pDevice)
 	LR2_CaptureScreen();
 	// check message
 	LR2_CheckMessage();
+
+	// control FPS
+	controlFPS();
 
 	return org_EndScene(pDevice); 
 }
