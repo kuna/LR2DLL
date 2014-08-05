@@ -103,14 +103,20 @@ int sleepTime = 0;
 int currentFPS = 0;
 bool limitFPS = true;
 
-#define MAXFPS 120
-#define MINFPS 60
+#define FPS 120
+
+#undef OLDFPSLIMIT
 
 VOID controlFPS() {
 	if (!limitFPS)
 		return;
 
 	DWORD nTime = GetTickCount();
+	DWORD sleepTime = 0;
+
+#ifdef OLDFPSLIMIT
+#define MAXFPS 120
+#define MINFPS 60
 	if (nTime - currentTime >= 1000 || currentTime == 0) {
 		// check FPS
 		if (currentFPS > MAXFPS)
@@ -125,6 +131,12 @@ VOID controlFPS() {
 	if (sleepTime < 0)
 		sleepTime = 0;
 	currentFPS++;
+#else
+	int currentFrame = (nTime%1000)*FPS / 1000;
+	int nextFrame = currentFrame+1;
+	sleepTime = nextFrame*1000/FPS - nTime%1000;
+#endif
+
 	Sleep(sleepTime);
 }
 
